@@ -1,0 +1,73 @@
+@startuml
+
+actor "작업자" as User
+
+box "EAF HMI SW"
+participant "EAF 출강계획" as Form20
+participant "MES 작업지시 Data" as Form21
+participant "출강계획 Heat 상세" as POPUP20
+end box
+
+database "EAF/LF 데이터베이스" as DB
+
+box "EAF/LF Task"
+participant "Task" as Task
+participant "File" as IFFile
+end box
+
+box "외부 시스템"
+participant "MES" as MES
+end box
+
+group Step 1: 작업지시 생성
+
+autonumber 1010 "(0)"
+User -> Form20 : 출강계획 조회
+Form20 -> DB : 출강계획 요청
+note right
+  ◈ INIDISP10
+  - SELECT TC_PROSCHE WHERE iLFCount_016 > 0
+end note
+DB -> Form20 : 출강계획 응답
+Form20 -> User : 출강계획 출력
+
+autonumber 1020 "(0)"
+User -> Form20 : MES 작업지시
+Form20 -> Form21 : MES 작업지시 출력
+Form21 -> DB : MES 작업지시 요청
+note right
+  - SELECT TM_MESRECV
+end note
+DB -> Form21 : MES 작업지시 응답
+Form21 -> User : MES 작업지시 출력
+
+autonumber 1020 "(0)"
+User -> Form21 : 재송신 요구
+Form21 -> Task : 재송신 요구 <font color=yellow> ( TASK ? )
+Form21 --> User : MES 작업지시 출력
+
+autonumber 1021 "(0)"
+User -> Form21 : 생성
+Form21 -> DB : 작업지시 생성 요청 <font color=blue> (  )
+note right
+  - INSERT TM_MESRECV
+end note
+DB -> Form21 : 작업지시 생성 응답
+Form21 -> User : 작업지시 생성 출력
+
+autonumber 1022 "(0)"
+User -> Form21 : MES 작업지시 복사
+Form21 -> DB : 작업지시 복사 처리 <font color=blue> (  )
+note right
+  - UPDATE TM_MESRECV
+  - INSERT TC_PROSCHE
+end note
+DB -> Form21 : 작업지시 복사 응답
+end
+
+group Step 2: 작업지시 실행
+autonumber 201 "(0)"
+Task -> DB : 재송신 요구 <font color=purple> ( ESD_PPM )
+end
+
+@enduml
