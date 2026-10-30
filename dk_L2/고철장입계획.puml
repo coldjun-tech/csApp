@@ -1,0 +1,24 @@
+@startuml
+
+actor "작업자" as User
+
+box "EAF HMI"
+participant "고철장입계획" as Form10
+participant "고철장입실적" as Form11
+end box
+
+database "EAF/LF 데이터베이스" as DB
+
+box "EAF/LF Task"
+participant "Task" as Task
+end box
+
+box "외부 시스템"
+participant "MES" as MES
+end box
+
+User -> Form10 : 고철장입계획 실행
+Form10 -> User : 고철장입계획 출력
+
+
+@enduml
