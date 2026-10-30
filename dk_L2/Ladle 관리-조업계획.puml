@@ -1,0 +1,68 @@
+@startuml
+
+autoactivate on
+
+actor "작업자" as User
+
+box "노즐용접 SW"
+participant "노즐용접 시스템" as SApp
+participant "OLT" as Rolt
+database "노즐용접 데이터베이스" as Data
+end box
+
+box "노즐용접 HW"
+participant "측정기" as Meas
+participant "로봇" as Robt
+participant "용접기" as Weld
+end box
+
+group Step 1: 품번 저장
+autonumber 101 "(0)"
+Rolt --> User : 용접정보 ( Excel )
+User -> SApp : 품번정보 추가 ( Excel )
+SApp -> Data : 품번정보 추가 요청
+Data --> SApp : 품번정보 추가 결과
+SApp --> User : 품번정보 출력
+end
+
+group Step 2: 품번 선택
+autonumber 201 "(0)"
+User -> SApp : 품번조회
+SApp -> Data : 품번정보 요청
+Data --> SApp : 품번정보 결과
+SApp --> User : 품번정보 확인
+User -> SApp : 품번선택
+SApp --> User : 선택품번 확인
+end
+
+group Step 3: 측정 운전
+autonumber 301 "(0)"
+User -> SApp : 측정시작 버튼클릭
+SApp -> Meas : 측정시작
+Meas --> SApp : 측정시작 결과
+SApp -> Rolt : 용접면 이동 좌표
+Rolt --> SApp : 용접면 좌표 통신 결과
+SApp -> Rolt : 용접면 이동 요청
+Rolt -> Robt : 용접면 이동 시작
+Robt --> Rolt : 용접면 이동 완료
+Rolt --> SApp : 용접면 이동 완료
+SApp -> Meas : 측정완료
+Meas --> SApp : 측정완료 결과
+SApp --> User : 측정결과 출력
+end
+
+group Step 4: 용접 운전
+autonumber 401 "(0)"
+User -> SApp : 용접시작 버튼클릭
+SApp -> Rolt : 용접면 위치, 용접량
+Rolt --> SApp : 용접면 정보 통신 결과
+SApp -> Rolt : 용접 요청
+Rolt -> Robt : 용접 이동 시작
+Robt -> Weld : 용접 시작
+Weld --> Robt : 용접 완료
+Robt --> Rolt : 용접 이동 완료
+Rolt --> SApp : 용접 완료
+SApp --> User : 용접결과 출력
+end
+
+@enduml
