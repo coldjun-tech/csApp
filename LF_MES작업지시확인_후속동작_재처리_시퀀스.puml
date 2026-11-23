@@ -1,0 +1,136 @@
+@startuml
+title LF 출강계획 → MES 작업지시 확인 → 후속 동작 및 Heat 재처리
+autonumber
+hide footbox
+skinparam defaultFontName Malgun Gothic
+skinparam sequenceMessageAlign left
+skinparam maxMessageSize 90
+actor "운전자" as U
+boundary "LF 출강계획\n화면 요청 번호 1" as L
+boundary "MES 작업지시\n11_MES Schedule" as M
+database "업무 DB\nMES 지시·생산계획·LF 실적" as D
+control "LMI_TOP\nCLMI_ProSchedule" as T
+control "LSD_PPM\nLF 생산계획 진도관리" as P
+collections "LF 공유메모리\n현재 Heat·설정치" as G
+
+note over U,G
+화면 근거: Task/Mmi/LF_A/LF_A_N 및 Task/Mmi/LF_B_N의 win00080.win, win00490.win,
+00000025.nmd(INIDISP101), 00000047.nmd(INIDISP103).
+서버 근거: LMI_ProSchedule.cpp, LMI_TOPDlg.cpp, LSD_PPMDlg.cpp.
+화면 조작 순서는 사용자 설명과 저장된 스크립트 기준이며 실기 운전 검증은 포함하지 않는다.
+end note
+
+== 1. MES 작업지시 화면 실행·확인 ==
+U -> L : MES 작업지시 화면 실행
+L -> M : Show "11_MES Schedule"
+M -> M : PAGECOUNT_11=0 / Hide "10_POPUP"\nSQLCONNECTEX() → INIDISP103()
+M -> D : TM_MESRECV 목록 SELECT\nnStatusX_104 < 3 / nSeqWork_014 ASC
+D --> M : 예정번호·연결 Heat·지시 용강량·성분 목표 등
+M -> D : TC_STEELRG 강종명 조회\nsHeatNom_048 = 목록의 강종 식별값
+D --> M : 강종명
+M --> U : 최대 15건씩 MES 작업지시 표시
+opt 앞·뒤 페이지 확인
+    U -> M : 페이지 이동
+    M -> M : PAGECOUNT_11 변경 → INIDISP103() 재조회
+end
+U -> M : 지시 확인 후 화면 닫기
+M -> M : HideSelf
+U -> L : LF 출강계획에서 후속 업무 선택
+note over L,D #E8F2FF
+확인한 LF MES 목록 화면에는 지시복사·생산계획 INSERT·MES 적용 상태 UPDATE가 없다.
+MES 목록 확인 후 재처리 Heat와 로는 출강계획에서 별도로 입력한다.
+MES 지시 확인 자체가 재처리를 자동 실행하지 않는다.
+end note
+
+== 2. 일반 계획 수정 또는 기타 후속 동작 ==
+opt LF 로·조업 패턴 일반 수정
+    U -> L : LF 로 또는 조업 패턴 입력 → 수정/저장 실행
+    L -> L : 입력 시 I_DISPLAYFLAG_10=1\n저장 스크립트에서 특수 업무 Flag가 없으면 INIDISP101(0)
+    L -> D : 화면에 표시된 계획별 UPDATE TC_PROSCHE\nHeat + LF 순번 기준 / sLFLinex_017, iLFPTNNo_018
+    L -> T : IOI01001/2/3/7/8 설정 / WkFlag=111
+    T ->> P : 다른 특수 업무 Flag가 없거나 LineFlg=100이면\nFlag=1 → LPPM_RENPRO(0)
+end
+note over L,P
+다른 후속 업무는 개별 선택 경로이다. 여러 조건은 독립 if문이어서 동시에 요청될 수 있다.
+계획 교환: From/To 입력·화면 검사 → ChangeFlg=100 → Flag=3 → LPPM_CHANGE().
+강제종료: LF 순번 입력·화면 검사 → ForEndFlg=100 → Heat/로 조회 → Flag=4 → LPPM_RENPRO(1).
+편로조업: 시작 순번·A/B/복구 입력·화면 검사 → RoFlg=100 → Flag=5 → 편로 처리.
+아래는 Heat 재처리 한 건을 단독 요청한 정상 경로를 상세히 표시한다.
+end note
+
+== 3. 재처리 대상 입력·검사·요청 ==
+U -> L : 재처리 Heat 번호와 로 A/B 입력\n수정/저장 실행
+L -> L : 입력 시 수정 모드(I_DISPLAYFLAG_10=1)\n저장 시 표시 모드(0)로 전환 / 요청 Flag 초기화
+alt 재처리 로가 A/B가 아님
+    L --> U : "재처리 로 구분 선택!" 알림
+else 로 A/B 선택됨
+    L -> D : SELECT sHeatNum_001 FROM TL_HTRESLT\nWHERE sHeatNum_001=입력 Heat
+    D --> L : 해당 Heat 실적 존재 여부
+    alt 실적 없음
+        L --> U : "실적에 해당 HEAT가 없습니다!!"\n재처리 Heat 번호 재입력 안내
+    else 실적 존재
+        L -> L : AlarmMsgWrite / I_RETRYFLAG_10=100\nINIDISP101(1): IOM01001=Heat, IOM01002=로
+    end
+end
+note over L,T #FFF1CF
+화면 검사 실패 시 재처리 Flag=100은 설정되지 않는다.
+다만 저장 스크립트는 즉시 반환하지 않으며 일반 수정 처리와 WkFlag=111 요청까지 진행할 수 있다.
+아래는 재처리 검사에 성공해 IOI01001=100으로 전달되는 경우이다.
+end note
+L -> T : IOI01001=100 / INIWKFLAG=111\n다른 요청 Flag도 전달 / 입력용 태그 초기화
+T -> T : ScreenManageMain(case 1)\n실행 중이면 큐 등록, 가능하면 스레드 실행
+T --> L : WkFlag=1001 수신 통보\n업무 완료 통보가 아님
+T -> L : DDE에서 RetryFlg 및 IOM01001/2 읽기
+L --> T : RetryFlg=100 / 재처리 Heat / 로 A/B
+T ->> P : MB_LSDPPM / WM_TOPPPM_SND\nFlag=2, Heat, 로, 발생 시각
+P -> P : ProcMailBox(case 2) → LPPM_RTYPRO()
+
+== 4. LF 실적의 잔여 용강량 이관 ==
+P -> P : Heat 공백·NULL 및 Flag=2 검사 / 로 A/B 검사\n오류 시 로그 후 재처리 중단
+P -> G : 대상 로의 현재 Heat 실적 읽기\nReadNowHeatGbl(A/B)
+G --> P : 현재 Heat / 현재 상태\n읽기 실패 시 중단
+P -> D : LPPM_AMOCAL → ReadHtResltTbl()\n입력 Heat의 최신 실적 1건 / 재처리 횟수 DESC
+D --> P : 재처리 횟수·기존 감산 용강량·처리 후 용강량
+P -> P : nMeltWet=처리 후 용강량\n감산 용강량 += nMeltWet / 처리 후 용강량=0 / 처리구분=1
+P -> D : WritHtResltTbl(Heat, 기존 재처리 횟수)\nTL_HTRESLT 기존 실적 UPDATE
+note over P,D #FFF1CF
+LPPM_AMOCAL 실패 시 LPPM_RTYPRO는 오류 로그만 남기고 계획 복구를 계속 호출한다.
+실적 조회 실패 시 nMeltWet이 초기화되지 않은 채 다음 처리에 사용될 가능성이 있다.
+아래는 실적 조회·갱신이 성공한 경로이다.
+end note
+
+== 5. 재처리 계획 복구·순번 조정 ==
+P -> D : LPPM_RETPRO → 조업 중 계획 조회\n0 < iLFStatu_015 < 4, iLFCount_016 > 0\nTOP 1 / LF 순번 DESC / 라인 조건 없음
+D --> P : 조업 중 최대 LF 순번 또는 조회 건 없음
+P -> P : 삽입 순번=조업 중 최대 LF 순번+1\n조업 중 Heat가 없으면 삽입 순번=1
+P -> D : 삽입 순번 이상 계획의 iLFStatu_015=0
+P -> D : 삽입 순번 이상 계획의 iLFCount_016 += 1
+P -> D : 재처리 대상 Heat의 TC_PROSCHE 조회
+D --> P : 기존 계획 및 재처리 횟수\n대상 계획 조회 실패 시 중단
+P -> D : 같은 Heat의 기존 계획 UPDATE\nEAF 순번=0 / LF 상태=0 / LF 순번=삽입 위치\n로=입력 A/B / 재처리 횟수+1\n출강 예정량=nMeltWet / 처리구분=1
+note over P,D
+재처리는 새 Heat를 INSERT하지 않고 기존 Heat의 계획을 다시 배치한다.
+계획 복구 단계에서 SQL 오류가 발생하면 FAIL 반환한다.
+여러 UPDATE를 묶는 명시적 트랜잭션·롤백은 이 함수에 없다.
+end note
+
+== 6. 현재 Heat 재구성과 화면 결과 확인 ==
+opt 앞서 읽은 현재 Heat가 없거나 현재 상태=4
+    P -> P : MailBox 초기화 → LPPM_RENPRO(0)
+    P -> D : A/B 로 현재 계획 확인·선정\nLPPM_SCHMAK()
+    P -> G : 조건에 맞는 로의 현재 Heat·설정치 생성·저장\nLPPM_HPDCRT / LPPM_SETCRT 등
+    note over P,G
+    RENPRO는 A/B 로를 각각 검사한다. 조업 중 상태 2/3의 현재 Heat는 생성 대상에서 제외한다.
+    현재 Heat가 조업 중이면 재처리 계획을 등록해 두고 즉시 교체하지 않는다.
+    end note
+end
+loop 출강계획 표시 모드(I_DISPLAYFLAG_10=0)의 정주기 갱신
+    L -> D : INIDISP10() / LF 출강계획 재조회
+    D --> L : 변경된 계획 순번·로·재처리 횟수·상태
+    L --> U : 재처리 계획 및 현재 Heat 표시 확인
+end
+note over T,G
+화면 입력 → DDE → MailBox → DB/공유메모리 처리 → 정주기 화면 조회로 이어진다.
+수신 통보(1001)나 MailBox 전송 성공은 재처리 업무 완료를 뜻하지 않는다.
+end note
+@enduml
