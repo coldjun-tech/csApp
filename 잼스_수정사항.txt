@@ -1,0 +1,70 @@
+확인했습니다. **이동 중 표시는 기존 PLC 신호를 활용할 수 있지만, “이번 위치 명령이 정상 완료됐다”는 표시를 정확히 하려면 PLC 프로그램 보완을 권장합니다.** `frmFixtExec`와 C# 통신 코드에도 수정할 부분이 있습니다.
+
+여기서 수정 대상은 **GM1 PLC 제어 프로그램**입니다. 현재 확인된 내용만으로 서보드라이버 펌웨어나 파라미터 변경이 필요한 근거는 없습니다.
+
+**1. 현재 구현 상태**
+
+| 구분 | 확인 결과 |
+|---|---|
+| 이동 중 신호 | PLC에 `GVL.ab_Servo_Busy[축번호]`가 있고, `uvf_11`, `12`는 OPC UA 공개 목록에도 있습니다. |
+| C# 수신 | Busy를 받아 `TDevcFixt.ActBusy`에 저장하는 코드가 있습니다. |
+| 이동 완료 신호 | InPosition 관련 블록·변수는 있지만, 공개 XML에는 완료 신호가 없습니다. 실제 연결 상태도 추가 확인이 필요합니다. |
+| 실행 화면 | `frmFixtExec`에는 Fixture·현재위치·현재토크 열만 있고 이동 상태 표시는 없습니다. |
+
+**`Busy = false`를 곧바로 “이동 완료”로 표시하면 안 됩니다.** 명령 전 대기, 중단, 오류도 구분해야 합니다. 이동 블록에는 `Done`, `CommandAborted`, `Error`가 별도로 제공됩니다. [CODESYS 이동 블록 설명](https://content.helpme-codesys.com/en/libs/SM3_Basic/Current/SM3_Basic/POUs/Movement/MC_MoveAbsolute.html)
+
+**2. PLC에서 수정할 위치**
+
+GM Programmer에서 다음 순서로 수정하면 됩니다.
+
+| 수정 위치 | 수정 내용 |
+|---|---|
+| `FB_Axis_Operate` | 현재 실행 중인 위치 명령의 `Busy`, `Done`, `CommandAborted`, `Error`를 구분해 출력 |
+| `MC_Servo_Operate` | 각 축의 출력 상태를 `GVL` 배열에 연결 |
+| `GVL` | 이동 완료·중단·오류 상태 및 필요하면 명령 번호 추가 |
+| Symbol Configuration | 추가 상태 변수를 OPC UA **읽기 전용**으로 공개 |
+
+추가 변수 예시는 다음과 같습니다.
+
+```iecst
+ab_MoveDone    : ARRAY[0..31] OF BOOL;
+ab_MoveAborted : ARRAY[0..31] OF BOOL;
+ab_MoveError   : ARRAY[0..31] OF BOOL;
+```
+
+완료 신호는 **현재 명령에 해당하는 이동 블록에서 취득하고, 다음 명령을 접수할 때 초기화**해야 합니다. 짧게 발생하는 완료 신호를 PC가 놓치지 않도록 결과를 유지해야 합니다.
+
+연속 이동까지 정확하게 추적하려면 `명령 번호 → 접수 번호 → 완료 번호`도 함께 제공하는 방식이 좋습니다. 이전 명령의 완료 상태가 새 명령의 완료로 표시되는 것을 막을 수 있습니다.
+
+실제 도달 여부까지 확인하려면 완료 조건에 **실제 위치 오차가 허용 범위 이내인지, 축이 정지했는지**도 함께 반영합니다. 기존 `FB_InPosition`을 활용하되 입력 연결과 허용 오차를 확인해야 합니다.
+
+또한 `uvf_13`의 공개 XML에는 `ab_Servo_Busy`도 빠져 있으므로 해당 PLC를 사용한다면 공개 설정을 추가해야 합니다.
+
+**3. C#에서 반드시 수정할 부분**
+
+| 파일·위치 | 확인된 문제와 수정 내용 |
+|---|---|
+| [ucDevcFixture.cs:116](</C:/02_잠조자료/잼스/src/uvfManager/using/ucDevcFixture.cs:116>) | `WritePosition()`이 명령 전송 직후 `ActPos`를 목표값으로 덮어씁니다. 이 대입을 제거하고 목표값은 별도 저장해야 합니다. 실제 위치는 OPC UA 수신값으로만 갱신해야 합니다. |
+| [ucDevcFixture.cs:256](</C:/02_잠조자료/잼스/src/uvfManager/using/ucDevcFixture.cs:256>) | OPC UA 감시 항목 등록과 구독 시작 코드가 주석 처리돼 있습니다. 이 로딩 경로에서는 실시간 수신이 시작되지 않으므로 활성화가 필요합니다. |
+| [ucDevcOpcUA.cs:72](</C:/02_잠조자료/잼스/src/uvfManager/using/ucDevcOpcUA.cs:72>) | 기존 Busy·위치 구독에 완료·중단·오류 신호를 추가합니다. |
+| [ucDevcOpcUA.cs:125](</C:/02_잠조자료/잼스/src/uvfManager/using/ucDevcOpcUA.cs:125>) | 수신 오류 때 기존 값이 남을 수 있습니다. 데이터 품질과 통신 상태를 관리해 “통신 이상”으로 표시해야 합니다. |
+| [frmFixtExec.cs:159](</C:/02_잠조자료/잼스/src/uvfManager/frmFixtExec.cs:159>) | `timRefresh.Tick`에 실제 화면 갱신 처리가 없습니다. 상태 계산과 그리드 갱신을 추가해야 합니다. |
+| [frmFixtExec.Designer.cs:853](</C:/02_잠조자료/잼스/src/uvfManager/frmFixtExec.Designer.cs:853>) | `이동 상태` 열을 추가하고 축별 상태에 연결합니다. |
+
+추가로 `TDevcFixt` 생성자에는 임의의 현재 위치·토크를 넣는 시험 코드가 있습니다. 실측값을 받기 전에는 `미확인`으로 표시하도록 바꾸는 것이 맞습니다.
+
+`frmFixtExec`가 연결한 이벤트는 **OPC DA 이벤트**이며, 해당 처리 함수에는 무조건 빠져나가는 `return`도 있습니다. 이 함수를 단순히 활성화하기보다는 **OPC UA로 갱신된 축 상태를 화면에 연결**해야 합니다.
+
+**4. 화면 표시 기준**
+
+| 표시 | 판단 기준 |
+|---|---|
+| 대기 | 새 위치 명령 없음 |
+| 명령 전송 중 | 전송했지만 PLC 접수 확인 전 |
+| 이동 중 | 해당 명령의 Busy 활성 |
+| 이동 완료 | 해당 명령 정상 완료 및 도달 조건 충족 |
+| 이동 중단 | 정지 또는 다른 명령으로 중단 |
+| 오류 | 이동 블록·서보 오류 |
+| 통신 이상 | OPC UA 수신 오류 또는 연결 감시 실패 |
+
+**우선 수정할 핵심은 `ActPos` 덮어쓰기 제거, OPC UA 구독 활성화, PLC 완료 결과 공개, `frmFixtExec` 상태 열·갱신 추가입니다.** 이번에는 코드 확인과 수정 위치 정리까지 진행했으며 파일은 변경하지 않았습니다.
